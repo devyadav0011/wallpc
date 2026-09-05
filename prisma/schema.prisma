@@ -1,0 +1,138 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Wallpaper {
+  id               String   @id @default(cuid())
+  title            String
+  slug             String   @unique
+  description      String?
+  categoryId       String
+  category         Category @relation(fields: [categoryId], references: [id])
+  resolutionWidth  Int
+  resolutionHeight Int
+  orientation      String   @default("landscape") // landscape, portrait, ultrawide
+  fileUrl          String
+  fileUrl4k        String?
+  fileUrl1440p     String?
+  fileUrl1080p     String?
+  thumbnailUrl     String
+  previewUrl       String
+  fileType         String   @default("WEBP") // WEBP, JPG, PNG, AVIF
+  fileSize         String   @default("4.2 MB")
+  views            Int      @default(0)
+  downloads        Int      @default(0)
+  trendingScore    Float    @default(0.0)
+  featured         Boolean  @default(false)
+  trending         Boolean  @default(false)
+  published        Boolean  @default(true)
+  creatorName      String?
+  creatorUrl       String?
+  sourceUrl        String?
+  license          String?  @default("Free for personal desktop use")
+
+  tags             WallpaperTag[]
+  collections      CollectionWallpaper[]
+  downloadEvents   DownloadEvent[]
+  viewEvents       ViewEvent[]
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([slug])
+  @@index([categoryId])
+  @@index([orientation])
+  @@index([published])
+  @@index([trending])
+  @@index([featured])
+  @@index([downloads])
+  @@index([views])
+  @@index([trendingScore])
+  @@index([createdAt])
+}
+
+model Category {
+  id          String      @id @default(cuid())
+  name        String
+  slug        String      @unique
+  description String
+  coverImage  String
+  order       Int         @default(0)
+  wallpapers  Wallpaper[]
+  createdAt   DateTime    @default(now())
+
+  @@index([slug])
+  @@index([order])
+}
+
+model Tag {
+  id         String         @id @default(cuid())
+  name       String
+  slug       String         @unique
+  wallpapers WallpaperTag[]
+
+  @@index([slug])
+}
+
+model WallpaperTag {
+  id          String    @id @default(cuid())
+  wallpaperId String
+  tagId       String
+  wallpaper   Wallpaper @relation(fields: [wallpaperId], references: [id], onDelete: Cascade)
+  tag         Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([wallpaperId, tagId])
+}
+
+model Collection {
+  id          String                @id @default(cuid())
+  name        String
+  slug        String                @unique
+  description String
+  coverImage  String
+  featured    Boolean               @default(false)
+  wallpapers  CollectionWallpaper[]
+  createdAt   DateTime              @default(now())
+
+  @@index([slug])
+  @@index([featured])
+}
+
+model CollectionWallpaper {
+  id           String     @id @default(cuid())
+  collectionId String
+  wallpaperId  String
+  order        Int        @default(0)
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  wallpaper    Wallpaper  @relation(fields: [wallpaperId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, wallpaperId])
+}
+
+model DownloadEvent {
+  id                  String    @id @default(cuid())
+  wallpaperId         String
+  resolution          String?
+  timestamp           DateTime  @default(now())
+  anonymousIdentifier String?
+  wallpaper           Wallpaper @relation(fields: [wallpaperId], references: [id], onDelete: Cascade)
+
+  @@index([wallpaperId])
+  @@index([timestamp])
+}
+
+model ViewEvent {
+  id                  String    @id @default(cuid())
+  wallpaperId         String
+  timestamp           DateTime  @default(now())
+  anonymousIdentifier String?
+  wallpaper           Wallpaper @relation(fields: [wallpaperId], references: [id], onDelete: Cascade)
+
+  @@index([wallpaperId])
+  @@index([timestamp])
+}
