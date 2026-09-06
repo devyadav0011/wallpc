@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAdminAuth } from "@/lib/adminAuth";
-import { db, isDatabaseConfigured } from "@/lib/db";
+import { db, isDatabaseConfigured, isPostgresConfigured } from "@/lib/db";
 import { getWallpapers } from "@/lib/wallpaper-service";
+import { getStorageProvider } from "@/lib/storage";
 
 export interface WallpaperHealthItem {
   id: string;
@@ -22,9 +23,62 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    let wallpapers: any[] = [];
+    // 1. Database health
+    let dbStatus: {
+      status: "connected" | "unavailable" | "not_configured";
+      provider: "postgresql" | "sqlite" | "none";
+      wallpapersCount?: number;
+      categoriesCount?: number;
+      error?: string;
+    } = {
+      status: "not_configured",
+      provider: "none",
+    };
 
-    if (isDatabaseConfigured()) {
+    if (!isDatabaseConfigured()) {
+      dbStatus = {
+        status: "not_configured",
+        provider: "none",
+        error: process.env.VERCEL
+          ? "Production database not configured. SQLite is not supported on Vercel; configure a PostgreSQL DATABASE_URL."
+          : "DATABASE_URL environment variable is not configured.",
+      };
+    } else {
+      const provider = isPostgresConfigured() ? "postgresql" : "sqlite";
+      try {
+        await db.$queryRaw`SELECT 1`;
+        const [wCount, cCount] = await Promise.all([
+          db.wallpaper.count(),
+          db.category.count(),
+        ]);
+        dbStatus = {
+          status: "connected",
+          provider,
+          wallpapersCount: wCount,
+          categoriesCount: cCount,
+        };
+      } catch (dbErr: any) {
+        dbStatus = {
+          status: "unavailable",
+          provider,
+          error: dbErr?.message?.split("\n")[0] || "Failed to query database",
+        };
+      }
+    }
+
+    // 2. Storage health
+    const storageProvider = getStorageProvider();
+    const storageStatus = {
+      status:
+        storageProvider.name === "local" && process.env.VERCEL
+          ? "in_memory_fallback"
+          : "configured",
+      provider: storageProvider.name,
+    };
+
+    // 3. Wallpaper Asset Health
+    let wallpapers: any[] = [];
+    if (dbStatus.status === "connected") {
       try {
         wallpapers = await db.wallpaper.findMany({
           orderBy: { createdAt: "desc" },
@@ -32,8 +86,8 @@ export async function GET(request: NextRequest) {
             category: { select: { id: true, name: true, slug: true } },
           },
         });
-      } catch (dbErr) {
-        console.warn("Database query failed in admin health, using fallback:", dbErr);
+      } catch (e) {
+        console.warn("[Admin Health] DB query failed, using static list:", e);
       }
     }
 
@@ -87,11 +141,22 @@ export async function GET(request: NextRequest) {
     const summary = {
       total: items.length,
       healthy: items.filter((i) => i.status === "healthy").length,
-      broken: items.filter((i) => i.status === "broken_url" || i.status === "unsafe_local_path" || i.status === "missing_url").length,
+      broken: items.filter(
+        (i) =>
+          i.status === "broken_url" ||
+          i.status === "unsafe_local_path" ||
+          i.status === "missing_url"
+      ).length,
       missingDimensions: items.filter((i) => i.status === "missing_dimensions").length,
     };
 
-    return NextResponse.json({ summary, items, wallpapers: items });
+    return NextResponse.json({
+      database: dbStatus,
+      storage: storageStatus,
+      summary,
+      items,
+      wallpapers: items,
+    });
   } catch (err: any) {
     console.error("Admin health check error:", err);
     return NextResponse.json({ error: "Health check failed" }, { status: 500 });

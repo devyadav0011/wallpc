@@ -4,10 +4,32 @@ const { execSync } = require("child_process");
 
 const schemaPath = path.join(__dirname, "..", "prisma", "schema.prisma");
 
+function getDatabaseUrl() {
+  if (process.env.DATABASE_URL && process.env.DATABASE_URL.trim()) {
+    return process.env.DATABASE_URL.trim();
+  }
+  const envFiles = [".env.production", ".env.local", ".env"];
+  for (const envFile of envFiles) {
+    const filePath = path.join(__dirname, "..", envFile);
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, "utf8");
+      const match = content.match(/^DATABASE_URL\s*=\s*["']?([^"'\r\n]+)["']?/m);
+      if (match) {
+        return match[1].trim();
+      }
+    }
+  }
+  return "";
+}
+
 function configurePrismaProvider() {
-  const dbUrl = (process.env.DATABASE_URL || "").trim();
-  const isPostgres = dbUrl.startsWith("postgres://") || dbUrl.startsWith("postgresql://");
-  const targetProvider = isPostgres ? "postgresql" : "sqlite";
+  const dbUrl = getDatabaseUrl();
+  const isVercel = Boolean(process.env.VERCEL);
+  
+  // On Vercel, we always require PostgreSQL
+  // Locally, if DATABASE_URL starts with file: or is empty, support SQLite
+  const isSqlite = !isVercel && (dbUrl.startsWith("file:") || (!dbUrl && process.env.NODE_ENV !== "production"));
+  const targetProvider = isSqlite ? "sqlite" : "postgresql";
 
   if (!fs.existsSync(schemaPath)) {
     console.error(`[prisma-provider] Schema not found at: ${schemaPath}`);
@@ -27,7 +49,7 @@ function configurePrismaProvider() {
     fs.writeFileSync(schemaPath, schema, "utf8");
     console.log(`[prisma-provider] Updated schema.prisma with provider="${targetProvider}"`);
   } else {
-    console.log(`[prisma-provider] Current provider="${currentProvider}" matches environment (${targetProvider})`);
+    console.log(`[prisma-provider] Current provider="${currentProvider}" matches target (${targetProvider})`);
   }
 
   // Generate prisma client

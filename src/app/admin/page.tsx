@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db, isDatabaseConfigured } from "@/lib/db";
+import { ensureBaseData } from "@/lib/db-seed";
 import { getAdminSecretKey } from "@/lib/adminAuth";
 import {
   getWallpapers,
@@ -28,6 +29,7 @@ export default async function AdminDashboardPage() {
 
   if (isDatabaseConfigured()) {
     try {
+      await ensureBaseData(db);
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
