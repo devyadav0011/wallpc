@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db, isDatabaseConfigured } from "@/lib/db";
+import { getAdminSecretKey } from "@/lib/adminAuth";
 import {
   getWallpapers,
   getCategories,
@@ -14,7 +15,7 @@ export const revalidate = 0; // Dynamic admin data
 export default async function AdminDashboardPage() {
   const cookieStore = await cookies();
   const token = cookieStore.get("wallpc_admin_token")?.value || cookieStore.get("wallnet_admin_token")?.value;
-  const adminSecret = process.env.ADMIN_SECRET_KEY;
+  const adminSecret = getAdminSecretKey();
 
   if (!adminSecret || !token || token !== adminSecret) {
     redirect("/admin/login");

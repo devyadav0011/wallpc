@@ -1,7 +1,13 @@
 import { NextRequest } from "next/server";
 
+export const DEFAULT_ADMIN_KEY = "nimblux@Dev@8937";
+
+export function getAdminSecretKey(): string {
+  return process.env.ADMIN_SECRET_KEY?.trim() || DEFAULT_ADMIN_KEY;
+}
+
 export function verifyAdminAuth(request: NextRequest): boolean {
-  const secretKey = process.env.ADMIN_SECRET_KEY;
+  const secretKey = getAdminSecretKey();
   if (!secretKey) return false;
   
   // Check Authorization Header
@@ -19,3 +25,4 @@ export function verifyAdminAuth(request: NextRequest): boolean {
 
   return false;
 }
+

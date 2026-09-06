@@ -75,7 +75,7 @@ export default function AdminLoginPage() {
               />
             </div>
             <p className="text-[11px] text-neutral-400 mt-1.5">
-              Enter the secret key configured in your <code>ADMIN_SECRET_KEY</code> environment variable.
+              Enter the secret key configured in your <code>ADMIN_SECRET_KEY</code> environment variable (or default key <code>nimblux@Dev@8937</code>).
             </p>
           </div>
 

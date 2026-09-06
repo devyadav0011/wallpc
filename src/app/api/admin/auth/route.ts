@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAdminSecretKey } from "@/lib/adminAuth";
 
 export async function POST(request: NextRequest) {
   try {
     const { key } = await request.json();
-    const adminKey = process.env.ADMIN_SECRET_KEY;
+    const adminKey = getAdminSecretKey();
 
     if (!adminKey) {
       return NextResponse.json(
