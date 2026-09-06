@@ -35,24 +35,32 @@ import {
   ExternalLink,
 } from "lucide-react";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 interface Props {
   params: Promise<{ slug: string }>;
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  const wallpaper = await getWallpaperBySlug(slug);
+  const cleanSlug = decodeURIComponent(slug || "").toLowerCase().trim();
+  const wallpaper = await getWallpaperBySlug(cleanSlug);
 
   if (!wallpaper) {
-    return {
-      title: "Wallpaper Not Found",
-    };
+    notFound();
   }
 
   const title = `${wallpaper.title} 4K PC Wallpaper — Download Free`;
   const description =
     wallpaper.description ||
     `Download ${wallpaper.title} in 4K (${wallpaper.resolutionWidth}x${wallpaper.resolutionHeight}) for free with no login required.`;
+
+  const metaImage =
+    wallpaper.imageUrl ||
+    wallpaper.previewUrl ||
+    wallpaper.fileUrl ||
+    "/wallpapers/fallback.webp";
 
   return {
     title,
@@ -62,7 +70,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       description,
       images: [
         {
-          url: wallpaper.previewUrl || wallpaper.fileUrl,
+          url: metaImage,
           width: wallpaper.resolutionWidth,
           height: wallpaper.resolutionHeight,
           alt: wallpaper.title,
@@ -73,7 +81,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      images: [wallpaper.previewUrl || wallpaper.fileUrl],
+      images: [metaImage],
     },
     alternates: {
       canonical: `/wallpapers/${wallpaper.slug}`,
@@ -83,8 +91,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function WallpaperDetailPage({ params }: Props) {
   const { slug } = await params;
+  const cleanSlug = decodeURIComponent(slug || "").toLowerCase().trim();
 
-  const wallpaper = await getWallpaperBySlug(slug);
+  const wallpaper = await getWallpaperBySlug(cleanSlug);
 
   if (!wallpaper) {
     notFound();
@@ -168,7 +177,7 @@ export default async function WallpaperDetailPage({ params }: Props) {
                 }`}
               >
                 <Image
-                  src={wallpaper.previewUrl || wallpaper.fileUrl4k || wallpaper.fileUrl}
+                  src={wallpaper.imageUrl || wallpaper.previewUrl || wallpaper.fileUrl4k || wallpaper.fileUrl || "/wallpapers/fallback.webp"}
                   alt={`${wallpaper.title} 4K PC Wallpaper`}
                   fill
                   priority
@@ -244,10 +253,10 @@ export default async function WallpaperDetailPage({ params }: Props) {
                 slug={wallpaper.slug}
                 width={wallpaper.resolutionWidth}
                 height={wallpaper.resolutionHeight}
-                fileUrl4k={wallpaper.fileUrl4k}
-                fileUrl1440p={wallpaper.fileUrl1440p}
-                fileUrl1080p={wallpaper.fileUrl1080p}
-                fileUrl={wallpaper.fileUrl}
+                fileUrl4k={wallpaper.image4kUrl || wallpaper.fileUrl4k || wallpaper.imageUrl}
+                fileUrl1440p={wallpaper.image1440Url || wallpaper.fileUrl1440p}
+                fileUrl1080p={wallpaper.image1080Url || wallpaper.fileUrl1080p}
+                fileUrl={wallpaper.imageUrl || wallpaper.fileUrl}
               />
 
               {/* Supporting actions: Favorite & Share */}

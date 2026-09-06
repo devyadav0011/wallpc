@@ -1,3 +1,5 @@
+export { type NormalizedWallpaper, normalizeWallpaper, FALLBACK_WALLPAPER_IMAGE } from "@/lib/types";
+
 export interface Wallpaper {
   id: string;
   slug: string;
@@ -6,6 +8,12 @@ export interface Wallpaper {
   image: string;
   thumbnail: string;
   previewUrl: string;
+  imageUrl?: string;
+  thumbnailUrl?: string;
+  image4kUrl?: string;
+  image1440Url?: string;
+  image1080Url?: string;
+  fileUrl?: string;
   fileUrl4k: string;
   fileUrl1440p?: string;
   fileUrl1080p?: string;
@@ -29,6 +37,7 @@ export interface Wallpaper {
   license?: string;
   collectionSlugs?: string[];
 }
+
 
 export interface Category {
   id: string;

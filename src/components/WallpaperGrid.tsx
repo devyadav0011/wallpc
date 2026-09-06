@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { WallpaperItem } from "@/lib/types";
+import { WallpaperItem, NormalizedWallpaper } from "@/lib/types";
 import { WallpaperCard } from "./WallpaperCard";
 import { SearchX, RotateCcw, Compass } from "lucide-react";
 
 interface WallpaperGridProps {
-  wallpapers: WallpaperItem[];
+  wallpapers: (WallpaperItem | NormalizedWallpaper)[];
   loading?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;

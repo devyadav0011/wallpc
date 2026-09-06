@@ -4,13 +4,13 @@ import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { Download, Heart, Eye, ArrowUpRight, Check, Sparkles } from "lucide-react";
-import { WallpaperItem } from "@/lib/types";
+import { WallpaperItem, NormalizedWallpaper } from "@/lib/types";
 import { formatCount, getResolutionBadge } from "@/lib/utils";
 import { useFavorites } from "@/lib/favorites";
 import { triggerWallpaperDownload } from "@/lib/analytics";
 
 interface WallpaperCardProps {
-  wallpaper: WallpaperItem;
+  wallpaper: WallpaperItem | NormalizedWallpaper;
   priority?: boolean;
 }
 
@@ -18,6 +18,16 @@ export function WallpaperCard({ wallpaper, priority = false }: WallpaperCardProp
   const { isFavorited, toggle } = useFavorites();
   const [downloading, setDownloading] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [imgSrc, setImgSrc] = useState<string>(() => {
+    return (
+      wallpaper.thumbnailUrl ||
+      wallpaper.imageUrl ||
+      wallpaper.previewUrl ||
+      wallpaper.fileUrl ||
+      "/wallpapers/fallback.webp"
+    );
+  });
+  const [hasError, setHasError] = useState(false);
   const favorited = isFavorited(wallpaper.id);
 
   const handleDownload = async (e: React.MouseEvent) => {
@@ -27,11 +37,18 @@ export function WallpaperCard({ wallpaper, priority = false }: WallpaperCardProp
     if (downloading) return;
     setDownloading(true);
 
+    const downloadAsset =
+      wallpaper.image4kUrl ||
+      wallpaper.imageUrl ||
+      wallpaper.fileUrl4k ||
+      wallpaper.fileUrl ||
+      "/wallpapers/fallback.webp";
+
     try {
       await triggerWallpaperDownload(
         wallpaper.id,
         "4k",
-        wallpaper.fileUrl4k || wallpaper.fileUrl,
+        downloadAsset,
         `${wallpaper.slug}-4k.webp`
       );
       setDownloadSuccess(true);
@@ -65,7 +82,7 @@ export function WallpaperCard({ wallpaper, priority = false }: WallpaperCardProp
         }`}
       >
         <Image
-          src={wallpaper.thumbnailUrl || wallpaper.previewUrl || wallpaper.fileUrl}
+          src={imgSrc}
           alt={`${wallpaper.title} 4K PC Wallpaper`}
           fill
           sizes={
@@ -75,6 +92,12 @@ export function WallpaperCard({ wallpaper, priority = false }: WallpaperCardProp
           }
           priority={priority}
           loading={priority ? "eager" : "lazy"}
+          onError={() => {
+            if (imgSrc !== "/wallpapers/fallback.webp") {
+              setImgSrc("/wallpapers/fallback.webp");
+              setHasError(true);
+            }
+          }}
           className="object-cover group-hover:scale-105 transition-transform duration-500 ease-out"
         />
 

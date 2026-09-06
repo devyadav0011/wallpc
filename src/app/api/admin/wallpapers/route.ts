@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { db, isDatabaseConfigured } from "@/lib/db";
 import { verifyAdminAuth } from "@/lib/adminAuth";
-import { slugify } from "@/lib/utils";
+import { generateSlug } from "@/lib/utils";
 import { getWallpapers, addWallpaperToStore } from "@/lib/wallpaper-service";
 
 export async function GET(request: NextRequest) {
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let slug = slugify(title);
+    let slug = generateSlug(body.slug || title);
     const width = parseInt(resolutionWidth || "3840", 10);
     const height = parseInt(resolutionHeight || "2160", 10);
     const ratio = width / height;
@@ -108,6 +108,19 @@ export async function POST(request: NextRequest) {
 
     if (isDatabaseConfigured()) {
       try {
+        // Resolve categoryId to ensure valid foreign key
+        const categoryRecord =
+          (await db.category.findFirst({
+            where: {
+              OR: [
+                { id: categoryId },
+                { slug: categoryId.toLowerCase() },
+              ],
+            },
+          })) || (await db.category.findFirst());
+
+        const targetCategoryId = categoryRecord ? categoryRecord.id : categoryId;
+
         const existing = await db.wallpaper.findUnique({ where: { slug } });
         if (existing) {
           slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
@@ -118,7 +131,7 @@ export async function POST(request: NextRequest) {
             title,
             slug,
             description: description || null,
-            categoryId,
+            categoryId: targetCategoryId,
             resolutionWidth: width,
             resolutionHeight: height,
             orientation: computedOrientation,
@@ -137,12 +150,16 @@ export async function POST(request: NextRequest) {
             creatorUrl: creatorUrl || null,
             license: license || "Free for personal desktop use",
           },
+          include: {
+            category: true,
+          },
         });
 
         // Attach tags if provided
         if (Array.isArray(tags) && tags.length > 0) {
           for (const t of tags) {
-            const tagSlug = slugify(t);
+            const tagSlug = generateSlug(t);
+            if (!tagSlug) continue;
             const tagRecord = await db.tag.upsert({
               where: { slug: tagSlug },
               update: {},
@@ -158,7 +175,7 @@ export async function POST(request: NextRequest) {
           }
         }
       } catch (dbErr) {
-        console.warn("Database create failed, falling back to memory catalog sync:", dbErr);
+        console.error("Database create failed in POST /api/admin/wallpapers:", dbErr);
       }
     }
 

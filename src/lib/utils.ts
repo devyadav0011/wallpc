@@ -44,14 +44,15 @@ export function getAspectRatio(width: number, height: number): string {
   return `${rWidth}:${rHeight}`;
 }
 
-export function slugify(text: string): string {
+export function generateSlug(text: string): string {
   return text
     .toString()
     .toLowerCase()
     .trim()
+    .replace(/[^\w\s-]/g, "")
     .replace(/\s+/g, "-")
-    .replace(/[^\w\-]+/g, "")
-    .replace(/\-\-+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "");
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
+
+export const slugify = generateSlug;

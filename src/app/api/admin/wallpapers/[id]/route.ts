@@ -91,6 +91,9 @@ export async function DELETE(
 
     // Remove from memory store
     removeWallpaperFromStore(id);
+    if (existing?.slug) {
+      removeWallpaperFromStore(existing.slug);
+    }
 
     // Clean up associated uploaded files from storage
     if (existing) {
@@ -107,6 +110,9 @@ export async function DELETE(
       revalidatePath("/wallpapers");
       revalidatePath("/latest");
       revalidatePath("/trending");
+      if (existing?.slug) {
+        revalidatePath(`/wallpapers/${existing.slug}`);
+      }
     } catch {
       // Ignore
     }

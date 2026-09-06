@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAdminAuth } from "@/lib/adminAuth";
-import { uploadStorageFile } from "@/lib/storage";
+import { uploadWallpaper } from "@/lib/storage";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
 
@@ -163,8 +163,11 @@ export async function POST(request: NextRequest) {
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const filename = `${cleanBase}-${uniqueSuffix}${ext}`;
 
-    // Upload original file
-    const uploadResult = await uploadStorageFile(fileBuffer, filename, mimeType, "wallpapers");
+    // Upload original file using storage abstraction (generates wallpapers/{year}/{month}/{uuid}.ext)
+    const uploadResult = await uploadWallpaper(fileBuffer, {
+      filename: file.name,
+      contentType: mimeType,
+    });
 
     let thumbnailUrl = uploadResult.url;
 
@@ -172,13 +175,11 @@ export async function POST(request: NextRequest) {
     if (thumbnailFile) {
       try {
         const thumbBuffer = Buffer.from(await thumbnailFile.arrayBuffer());
-        const thumbFilename = `${cleanBase}-${uniqueSuffix}-thumb.webp`;
-        const thumbResult = await uploadStorageFile(
-          thumbBuffer,
-          thumbFilename,
-          "image/webp",
-          "wallpapers/thumbnails"
-        );
+        const thumbResult = await uploadWallpaper(thumbBuffer, {
+          filename: "thumb.webp",
+          contentType: "image/webp",
+          subfolder: "thumbnails",
+        });
         thumbnailUrl = thumbResult.url;
       } catch (thumbErr) {
         console.warn("Thumbnail upload warning, falling back to original:", thumbErr);
@@ -189,6 +190,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      imageUrl: uploadResult.url,
       fileUrl: uploadResult.url,
       thumbnailUrl,
       width,
@@ -197,7 +199,7 @@ export async function POST(request: NextRequest) {
       aspectRatio,
       fileType: detectedFormat.toUpperCase(),
       fileSize: fileSizeFormatted,
-      filename,
+      pathname: uploadResult.pathname,
     });
   } catch (err: any) {
     console.error("Upload error:", err);
