@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminSecretKey } from "@/lib/adminAuth";
+import { getAdminSecretKey, safeCompare } from "@/lib/adminAuth";
 
 export async function POST(request: NextRequest) {
   try {
-    const { key } = await request.json();
+    const { key } = await request.json().catch(() => ({}));
     const adminKey = getAdminSecretKey();
 
     if (!adminKey) {
       return NextResponse.json(
-        { error: "ADMIN_SECRET_KEY environment variable is not configured" },
+        { error: "Admin authentication is not configured for this deployment." },
         { status: 503 }
       );
     }
 
-    if (!key || key !== adminKey) {
-      return NextResponse.json({ error: "Invalid admin key" }, { status: 401 });
+    if (!key || !safeCompare(key, adminKey)) {
+      return NextResponse.json({ error: "Invalid administrator key." }, { status: 401 });
     }
 
     const response = NextResponse.json({ success: true, message: "Authenticated successfully" });

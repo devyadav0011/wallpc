@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Lock, KeyRound, AlertCircle, ArrowRight, ShieldCheck } from "lucide-react";
+import { Lock, KeyRound, AlertCircle, ArrowRight } from "lucide-react";
 
 export default function AdminLoginPage() {
   const [key, setKey] = useState("");
@@ -23,14 +23,15 @@ export default function AdminLoginPage() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Authentication failed");
       }
 
       router.push("/admin");
       router.refresh();
-    } catch (err: any) {
-      setError(err.message || "Invalid admin key");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Invalid administrator key.";
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -52,7 +53,7 @@ export default function AdminLoginPage() {
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs font-semibold">
+          <div className="flex items-center gap-2.5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-semibold">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{error}</span>
           </div>
@@ -61,7 +62,7 @@ export default function AdminLoginPage() {
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-neutral-300 mb-1.5">
-              Admin Secret Key
+              ADMIN SECRET KEY
             </label>
             <div className="relative flex items-center">
               <KeyRound className="w-4 h-4 text-neutral-400 absolute left-3.5" />
@@ -70,12 +71,13 @@ export default function AdminLoginPage() {
                 required
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
-                placeholder="Enter ADMIN_SECRET_KEY..."
+                placeholder="Enter administrator key"
+                autoComplete="current-password"
                 className="w-full pl-10 pr-4 py-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 text-sm text-neutral-900 dark:text-white placeholder:text-neutral-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
               />
             </div>
             <p className="text-[11px] text-neutral-400 mt-1.5">
-              Enter the secret key configured in your <code>ADMIN_SECRET_KEY</code> environment variable (or default key <code>nimblux@Dev@8937</code>).
+              Enter the administrator key configured for this deployment.
             </p>
           </div>
 
