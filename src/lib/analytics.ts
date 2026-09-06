@@ -31,7 +31,7 @@ export async function trackWallpaperView(wallpaperId: string) {
 
 export async function triggerWallpaperDownload(
   wallpaperId: string,
-  resolution: "4k" | "1440p" | "1080p" = "4k",
+  resolution: "4k" | "1440p" | "1080p" | string = "4k",
   fallbackUrl?: string,
   filename?: string
 ) {

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { db, isDatabaseConfigured } from "@/lib/db";
 import { verifyAdminAuth } from "@/lib/adminAuth";
 import { slugify } from "@/lib/utils";
-import { getWallpapers } from "@/lib/wallpaper-service";
+import { getWallpapers, addWallpaperToStore } from "@/lib/wallpaper-service";
 
 export async function GET(request: NextRequest) {
   if (!verifyAdminAuth(request)) {
@@ -63,13 +64,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!isDatabaseConfigured()) {
-    return NextResponse.json(
-      { error: "Database not configured. Set DATABASE_URL in your environment to enable uploads." },
-      { status: 503 }
-    );
-  }
-
   try {
     const body = await request.json();
     const {
@@ -97,67 +91,122 @@ export async function POST(request: NextRequest) {
     } = body;
 
     if (!title || !categoryId || !fileUrl) {
-      return NextResponse.json({ error: "Title, category, and file URL are required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Title, category, and image are required" },
+        { status: 400 }
+      );
     }
 
     let slug = slugify(title);
-    // Ensure slug uniqueness
-    const existing = await db.wallpaper.findUnique({ where: { slug } });
-    if (existing) {
-      slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
-    }
-
     const width = parseInt(resolutionWidth || "3840", 10);
     const height = parseInt(resolutionHeight || "2160", 10);
+    const ratio = width / height;
+    const computedOrientation =
+      orientation || (ratio >= 2.1 ? "ultrawide" : ratio < 1 ? "portrait" : "landscape");
 
-    const wallpaper = await db.wallpaper.create({
-      data: {
-        title,
-        slug,
-        description: description || null,
-        categoryId,
-        resolutionWidth: width,
-        resolutionHeight: height,
-        orientation: orientation || (width / height > 2 ? "ultrawide" : "landscape"),
-        fileUrl,
-        fileUrl4k: fileUrl4k || fileUrl,
-        fileUrl1440p: fileUrl1440p || null,
-        fileUrl1080p: fileUrl1080p || null,
-        thumbnailUrl: thumbnailUrl || fileUrl,
-        previewUrl: previewUrl || fileUrl,
-        fileType: fileType || "WEBP",
-        fileSize: fileSize || "4.8 MB",
-        featured: !!featured,
-        trending: !!trending,
-        published: published !== undefined ? !!published : true,
-        creatorName: creatorName || null,
-        creatorUrl: creatorUrl || null,
-        license: license || "Free for personal desktop use",
-      },
-    });
+    let createdWallpaper: any = null;
 
-    // Attach tags if provided
-    if (Array.isArray(tags) && tags.length > 0) {
-      for (const t of tags) {
-        const tagSlug = slugify(t);
-        const tagRecord = await db.tag.upsert({
-          where: { slug: tagSlug },
-          update: {},
-          create: { name: t, slug: tagSlug },
-        });
+    if (isDatabaseConfigured()) {
+      try {
+        const existing = await db.wallpaper.findUnique({ where: { slug } });
+        if (existing) {
+          slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
+        }
 
-        await db.wallpaperTag.create({
+        createdWallpaper = await db.wallpaper.create({
           data: {
-            wallpaperId: wallpaper.id,
-            tagId: tagRecord.id,
+            title,
+            slug,
+            description: description || null,
+            categoryId,
+            resolutionWidth: width,
+            resolutionHeight: height,
+            orientation: computedOrientation,
+            fileUrl,
+            fileUrl4k: fileUrl4k || fileUrl,
+            fileUrl1440p: fileUrl1440p || null,
+            fileUrl1080p: fileUrl1080p || null,
+            thumbnailUrl: thumbnailUrl || fileUrl,
+            previewUrl: previewUrl || fileUrl,
+            fileType: fileType || "WEBP",
+            fileSize: fileSize || "4.8 MB",
+            featured: !!featured,
+            trending: !!trending,
+            published: published !== undefined ? !!published : true,
+            creatorName: creatorName || null,
+            creatorUrl: creatorUrl || null,
+            license: license || "Free for personal desktop use",
           },
         });
+
+        // Attach tags if provided
+        if (Array.isArray(tags) && tags.length > 0) {
+          for (const t of tags) {
+            const tagSlug = slugify(t);
+            const tagRecord = await db.tag.upsert({
+              where: { slug: tagSlug },
+              update: {},
+              create: { name: t, slug: tagSlug },
+            });
+
+            await db.wallpaperTag.create({
+              data: {
+                wallpaperId: createdWallpaper.id,
+                tagId: tagRecord.id,
+              },
+            });
+          }
+        }
+      } catch (dbErr) {
+        console.warn("Database create failed, falling back to memory catalog sync:", dbErr);
       }
     }
 
-    return NextResponse.json({ success: true, wallpaper });
+    // Always synchronize into runtime wallpaper catalog so it's instantly available everywhere
+    const memoryWallpaper = addWallpaperToStore({
+      id: createdWallpaper?.id || `wp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      title,
+      slug,
+      description,
+      categoryId,
+      resolutionWidth: width,
+      resolutionHeight: height,
+      orientation: computedOrientation,
+      fileUrl,
+      fileUrl4k: fileUrl4k || fileUrl,
+      fileUrl1440p,
+      fileUrl1080p,
+      thumbnailUrl: thumbnailUrl || fileUrl,
+      previewUrl: previewUrl || fileUrl,
+      fileType: fileType || "WEBP",
+      fileSize: fileSize || "4.8 MB",
+      featured: !!featured,
+      trending: !!trending,
+      published: published !== undefined ? !!published : true,
+      creatorName,
+      creatorUrl,
+      license: license || "Free for personal desktop use",
+      tags,
+    });
+
+    // Revalidate public routes
+    try {
+      revalidatePath("/");
+      revalidatePath("/wallpapers");
+      revalidatePath("/latest");
+      revalidatePath("/trending");
+      revalidatePath(`/wallpapers/${slug}`);
+    } catch {
+      // Revalidation optional in static/dev contexts
+    }
+
+    return NextResponse.json({
+      success: true,
+      wallpaper: createdWallpaper || memoryWallpaper,
+    });
   } catch (err) {
     console.error("Admin POST wallpaper error:", err);
     return NextResponse.json({ error: "Failed to create wallpaper" }, { status: 500 });
   }
 }
+

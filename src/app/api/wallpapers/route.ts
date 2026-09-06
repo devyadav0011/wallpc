@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       wallpapers: result.data,
+      data: result.data,
       total: result.total,
       page: result.page,
       limit: result.limit,

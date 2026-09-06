@@ -29,10 +29,21 @@ export type FullWallpaper = Omit<WallpaperItem, "category"> & {
 export type FullCategory = CategoryItem & Category;
 export type FullCollection = CollectionItem & Collection;
 
-// In-memory / dynamic store for demo session mutations
-let wallpapersStore = [...WALLPAPERS];
-let categoriesStore = [...CATEGORIES];
-let collectionsStore = [...COLLECTIONS];
+// Shared singleton stores across Next.js server chunks
+const globalRef = globalThis as any;
+if (!globalRef.__wallpc_wallpapers_store__) {
+  globalRef.__wallpc_wallpapers_store__ = [...WALLPAPERS];
+}
+if (!globalRef.__wallpc_categories_store__) {
+  globalRef.__wallpc_categories_store__ = [...CATEGORIES];
+}
+if (!globalRef.__wallpc_collections_store__) {
+  globalRef.__wallpc_collections_store__ = [...COLLECTIONS];
+}
+
+let wallpapersStore: Wallpaper[] = globalRef.__wallpc_wallpapers_store__;
+let categoriesStore: Category[] = globalRef.__wallpc_categories_store__;
+let collectionsStore: Collection[] = globalRef.__wallpc_collections_store__;
 
 export function formatWallpaperToItem(w: Wallpaper): FullWallpaper {
   const tagsList = (w.tags || []).map((t: any) => {
@@ -337,5 +348,79 @@ export async function getPlatformStats() {
     topDownloaded,
     trendingWallpapers,
   };
+}
+
+export function addWallpaperToStore(wallpaper: any): FullWallpaper {
+  const categoryMatch = categoriesStore.find(
+    (c) => c.id === wallpaper.categoryId || c.slug === wallpaper.categoryId
+  );
+  const categoryName = categoryMatch ? categoryMatch.name : (wallpaper.category?.name || "General");
+  const categorySlug = categoryMatch ? categoryMatch.slug : (wallpaper.category?.slug || "general");
+
+  const newItem: Wallpaper = {
+    id: wallpaper.id || `wp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    slug: wallpaper.slug,
+    title: wallpaper.title,
+    description: wallpaper.description || "",
+    image: wallpaper.fileUrl4k || wallpaper.fileUrl,
+    thumbnail: wallpaper.thumbnailUrl || wallpaper.fileUrl,
+    previewUrl: wallpaper.previewUrl || wallpaper.fileUrl,
+    fileUrl4k: wallpaper.fileUrl4k || wallpaper.fileUrl,
+    fileUrl1440p: wallpaper.fileUrl1440p || undefined,
+    fileUrl1080p: wallpaper.fileUrl1080p || undefined,
+    category: categoryName,
+    categorySlug: categorySlug,
+    tags: Array.isArray(wallpaper.tags)
+      ? wallpaper.tags.map((t: any) => (typeof t === "string" ? t : t.tag?.name || t.name))
+      : [],
+    width: wallpaper.resolutionWidth || wallpaper.width || 3840,
+    height: wallpaper.resolutionHeight || wallpaper.height || 2160,
+    resolution: `${wallpaper.resolutionWidth || wallpaper.width || 3840}×${wallpaper.resolutionHeight || wallpaper.height || 2160}`,
+    orientation: wallpaper.orientation || "landscape",
+    fileType: wallpaper.fileType || "WEBP",
+    fileSize: wallpaper.fileSize || "4.5 MB",
+    downloads: wallpaper.downloads || 0,
+    views: wallpaper.views || 0,
+    trendingScore: wallpaper.trendingScore || 10,
+    featured: !!wallpaper.featured,
+    trending: !!wallpaper.trending,
+    createdAt: wallpaper.createdAt || new Date().toISOString(),
+    creatorName: wallpaper.creatorName || undefined,
+    creatorUrl: wallpaper.creatorUrl || undefined,
+    license: wallpaper.license || "Free for personal desktop use",
+    collectionSlugs: wallpaper.collectionSlugs || [],
+  };
+
+  globalRef.__wallpc_wallpapers_store__.unshift(newItem);
+  wallpapersStore = globalRef.__wallpc_wallpapers_store__;
+  return formatWallpaperToItem(newItem);
+}
+
+export function removeWallpaperFromStore(id: string): boolean {
+  const initialLen = globalRef.__wallpc_wallpapers_store__.length;
+  globalRef.__wallpc_wallpapers_store__ = globalRef.__wallpc_wallpapers_store__.filter(
+    (w: Wallpaper) => w.id !== id && w.slug !== id
+  );
+  wallpapersStore = globalRef.__wallpc_wallpapers_store__;
+  return wallpapersStore.length < initialLen;
+}
+
+export function updateWallpaperInStore(id: string, updates: any): FullWallpaper | null {
+  const item = wallpapersStore.find((w) => w.id === id || w.slug === id);
+  if (!item) return null;
+
+  if (updates.title !== undefined) item.title = updates.title;
+  if (updates.description !== undefined) item.description = updates.description;
+  if (updates.featured !== undefined) item.featured = !!updates.featured;
+  if (updates.trending !== undefined) item.trending = !!updates.trending;
+  if (updates.fileUrl !== undefined) {
+    item.image = updates.fileUrl;
+    item.fileUrl4k = updates.fileUrl4k || updates.fileUrl;
+  }
+  if (updates.thumbnailUrl !== undefined) item.thumbnail = updates.thumbnailUrl;
+  if (updates.resolutionWidth !== undefined) item.width = updates.resolutionWidth;
+  if (updates.resolutionHeight !== undefined) item.height = updates.resolutionHeight;
+
+  return formatWallpaperToItem(item);
 }
 
