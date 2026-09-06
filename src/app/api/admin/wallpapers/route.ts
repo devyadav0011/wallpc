@@ -4,6 +4,8 @@ import { db, isDatabaseConfigured } from "@/lib/db";
 import { verifyAdminAuth } from "@/lib/adminAuth";
 import { generateSlug } from "@/lib/utils";
 import { getWallpapers, addWallpaperToStore } from "@/lib/wallpaper-service";
+import { deleteStorageFile } from "@/lib/storage";
+import { normalizeWallpaper } from "@/lib/types";
 
 export async function GET(request: NextRequest) {
   if (!verifyAdminAuth(request)) {
@@ -90,16 +92,18 @@ export async function POST(request: NextRequest) {
       tags = [],
     } = body;
 
-    if (!title || !categoryId || !fileUrl) {
+    const effectiveFileUrl = fileUrl || body.imageUrl || body.image;
+    if (!title || !categoryId || !effectiveFileUrl) {
       return NextResponse.json(
         { error: "Title, category, and image are required" },
         { status: 400 }
       );
     }
 
-    let slug = generateSlug(body.slug || title);
-    const width = parseInt(resolutionWidth || "3840", 10);
-    const height = parseInt(resolutionHeight || "2160", 10);
+    const baseSlug = generateSlug(body.slug || title) || `wallpaper-${Date.now()}`;
+    let slug = baseSlug;
+    const width = parseInt(body.width || resolutionWidth || "3840", 10);
+    const height = parseInt(body.height || resolutionHeight || "2160", 10);
     const ratio = width / height;
     const computedOrientation =
       orientation || (ratio >= 2.1 ? "ultrawide" : ratio < 1 ? "portrait" : "landscape");
@@ -121,10 +125,13 @@ export async function POST(request: NextRequest) {
 
         const targetCategoryId = categoryRecord ? categoryRecord.id : categoryId;
 
-        const existing = await db.wallpaper.findUnique({ where: { slug } });
-        if (existing) {
-          slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
+        // Collision check with incremental suffix
+        let candidateSlug = slug;
+        let counter = 1;
+        while (await db.wallpaper.findUnique({ where: { slug: candidateSlug } })) {
+          candidateSlug = `${slug}-${counter++}`;
         }
+        slug = candidateSlug;
 
         createdWallpaper = await db.wallpaper.create({
           data: {
@@ -132,15 +139,22 @@ export async function POST(request: NextRequest) {
             slug,
             description: description || null,
             categoryId: targetCategoryId,
+            width,
+            height,
+            resolution: `${width}×${height}`,
             resolutionWidth: width,
             resolutionHeight: height,
             orientation: computedOrientation,
-            fileUrl,
-            fileUrl4k: fileUrl4k || fileUrl,
+            imageUrl: effectiveFileUrl,
+            thumbnailUrl: thumbnailUrl || effectiveFileUrl,
+            image4kUrl: fileUrl4k || effectiveFileUrl,
+            image1440pUrl: fileUrl1440p || null,
+            image1080pUrl: fileUrl1080p || null,
+            fileUrl: effectiveFileUrl,
+            fileUrl4k: fileUrl4k || effectiveFileUrl,
             fileUrl1440p: fileUrl1440p || null,
             fileUrl1080p: fileUrl1080p || null,
-            thumbnailUrl: thumbnailUrl || fileUrl,
-            previewUrl: previewUrl || fileUrl,
+            previewUrl: previewUrl || effectiveFileUrl,
             fileType: fileType || "WEBP",
             fileSize: fileSize || "4.8 MB",
             featured: !!featured,
@@ -152,6 +166,9 @@ export async function POST(request: NextRequest) {
           },
           include: {
             category: true,
+            tags: {
+              include: { tag: true },
+            },
           },
         });
 
@@ -176,10 +193,13 @@ export async function POST(request: NextRequest) {
         }
       } catch (dbErr) {
         console.error("Database create failed in POST /api/admin/wallpapers:", dbErr);
+        if (fileUrl && fileUrl.startsWith("/api/uploads/")) {
+          await deleteStorageFile(fileUrl).catch(() => {});
+        }
+        return NextResponse.json({ error: "Failed to save wallpaper to persistent database" }, { status: 500 });
       }
     }
 
-    // Always synchronize into runtime wallpaper catalog so it's instantly available everywhere
     const memoryWallpaper = addWallpaperToStore({
       id: createdWallpaper?.id || `wp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       title,
@@ -212,14 +232,18 @@ export async function POST(request: NextRequest) {
       revalidatePath("/wallpapers");
       revalidatePath("/latest");
       revalidatePath("/trending");
+      revalidatePath("/popular");
+      revalidatePath("/search");
       revalidatePath(`/wallpapers/${slug}`);
     } catch {
       // Revalidation optional in static/dev contexts
     }
 
+    const finalWallpaper = createdWallpaper ? normalizeWallpaper(createdWallpaper) : memoryWallpaper;
+
     return NextResponse.json({
       success: true,
-      wallpaper: createdWallpaper || memoryWallpaper,
+      wallpaper: finalWallpaper,
     });
   } catch (err) {
     console.error("Admin POST wallpaper error:", err);

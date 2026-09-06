@@ -121,11 +121,24 @@ export function AdminPanel({
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [activeTab, setActiveTab] = useState<"wallpapers" | "upload" | "categories" | "collections">("wallpapers");
+  const [activeTab, setActiveTab] = useState<"wallpapers" | "upload" | "categories" | "collections" | "health">("wallpapers");
   const [wallpapers, setWallpapers] = useState(initialWallpapers);
   const [categories, setCategories] = useState(initialCategories);
   const [collections, setCollections] = useState(initialCollections);
   const [stats, setStats] = useState(initialStats);
+
+  // Image Health & Diagnostic State
+  const [healthData, setHealthData] = useState<any>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+
+  // Replace Image Modal State
+  const [replaceTarget, setReplaceTarget] = useState<any | null>(null);
+  const [replaceFile, setReplaceFile] = useState<File | null>(null);
+  const [replacePreview, setReplacePreview] = useState<string | null>(null);
+  const [replaceSpecs, setReplaceSpecs] = useState<DetectedSpecs | null>(null);
+  const [replaceLoading, setReplaceLoading] = useState(false);
+  const [replaceError, setReplaceError] = useState<string | null>(null);
+  const replaceFileInputRef = useRef<HTMLInputElement>(null);
 
   // File Upload State
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -172,6 +185,159 @@ export function AdminPanel({
     await fetch("/api/admin/auth", { method: "DELETE" });
     router.push("/admin/login");
     router.refresh();
+  };
+
+  const fetchHealthData = async () => {
+    setHealthLoading(true);
+    try {
+      const res = await fetch("/api/admin/health");
+      if (res.ok) {
+        const data = await res.json();
+        setHealthData(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch health data:", err);
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
+  const handleTabChange = (tab: "wallpapers" | "upload" | "categories" | "collections" | "health") => {
+    setActiveTab(tab);
+    if (tab === "health" && !healthData) {
+      fetchHealthData();
+    }
+  };
+
+  const openReplaceModal = (wallpaper: any) => {
+    setReplaceTarget(wallpaper);
+    setReplaceFile(null);
+    setReplacePreview(null);
+    setReplaceSpecs(null);
+    setReplaceError(null);
+  };
+
+  const closeReplaceModal = () => {
+    if (replacePreview) {
+      URL.revokeObjectURL(replacePreview);
+    }
+    setReplaceTarget(null);
+    setReplaceFile(null);
+    setReplacePreview(null);
+    setReplaceSpecs(null);
+    setReplaceError(null);
+  };
+
+  const handleReplaceFileSelect = (file: File) => {
+    setReplaceError(null);
+    const validMimes = ["image/jpeg", "image/png", "image/webp"];
+    if (!validMimes.includes(file.type.toLowerCase())) {
+      setReplaceError(
+        `Unsupported file type (${file.type || "unknown"}). Choose JPG, PNG, or WebP.`
+      );
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setReplaceError(
+        `File size (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds 25 MB limit.`
+      );
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    const img = new window.Image();
+    img.src = objectUrl;
+    img.onload = () => {
+      const width = img.naturalWidth;
+      const height = img.naturalHeight;
+      if (width < 1280 || height < 720) {
+        setReplaceError(`Image resolution (${width}×${height}) is too low.`);
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      const ratio = width / height;
+      const orientation: "landscape" | "portrait" | "ultrawide" =
+        ratio >= 2.1 ? "ultrawide" : ratio < 1 ? "portrait" : "landscape";
+      const aspectRatio = calculateAspectRatio(width, height);
+      const sizeFormatted = `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+
+      setReplaceFile(file);
+      setReplacePreview(objectUrl);
+      setReplaceSpecs({
+        width,
+        height,
+        aspectRatio,
+        orientation,
+        sizeFormatted,
+        format: file.type.split("/")[1]?.toUpperCase() || "WEBP",
+      });
+    };
+    img.onerror = () => {
+      setReplaceError("Failed to read image file.");
+      URL.revokeObjectURL(objectUrl);
+    };
+  };
+
+  const executeReplaceImage = async () => {
+    if (!replaceTarget || !replaceFile || !replaceSpecs) return;
+    setReplaceLoading(true);
+    setReplaceError(null);
+    try {
+      // 1. Generate thumbnail & upload new file
+      const thumbBlob = await createThumbnail(replaceFile, 800);
+      const uploadFormData = new FormData();
+      uploadFormData.append("file", replaceFile);
+      if (thumbBlob) {
+        uploadFormData.append("thumbnail", thumbBlob, "thumbnail.webp");
+      }
+      uploadFormData.append("width", replaceSpecs.width.toString());
+      uploadFormData.append("height", replaceSpecs.height.toString());
+
+      const uploadRes = await fetch("/api/admin/wallpapers/upload", {
+        method: "POST",
+        body: uploadFormData,
+      });
+      if (!uploadRes.ok) {
+        const errData = await uploadRes.json().catch(() => ({}));
+        throw new Error(errData.error || "Upload failed");
+      }
+      const uploadResult = await uploadRes.json();
+
+      // 2. Update wallpaper record in DB
+      const updateRes = await fetch(`/api/admin/wallpapers/${replaceTarget.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageUrl: uploadResult.fileUrl,
+          thumbnailUrl: uploadResult.thumbnailUrl,
+          width: uploadResult.width,
+          height: uploadResult.height,
+          resolutionWidth: uploadResult.width,
+          resolutionHeight: uploadResult.height,
+          fileType: uploadResult.fileType,
+          fileSize: uploadResult.fileSize,
+        }),
+      });
+
+      if (!updateRes.ok) {
+        const errData = await updateRes.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to update wallpaper");
+      }
+      const updateData = await updateRes.json();
+      const updatedWallpaper = updateData.wallpaper;
+
+      // Update local state
+      setWallpapers(wallpapers.map((w) => (w.id === replaceTarget.id ? updatedWallpaper : w)));
+      if (healthData) {
+        fetchHealthData();
+      }
+      closeReplaceModal();
+    } catch (err: any) {
+      console.error("Replace image error:", err);
+      setReplaceError(err.message || "Failed to replace image");
+    } finally {
+      setReplaceLoading(false);
+    }
   };
 
   const handleFileSelect = (file: File) => {
@@ -535,10 +701,10 @@ export function AdminPanel({
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-neutral-200 dark:border-neutral-800 pb-2">
+      <div className="flex items-center gap-2 border-b border-neutral-200 dark:border-neutral-800 pb-2 overflow-x-auto">
         <button
-          onClick={() => setActiveTab("wallpapers")}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+          onClick={() => handleTabChange("wallpapers")}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors shrink-0 ${
             activeTab === "wallpapers"
               ? "bg-indigo-600 text-white shadow-sm"
               : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
@@ -547,8 +713,8 @@ export function AdminPanel({
           Wallpapers ({wallpapers.length})
         </button>
         <button
-          onClick={() => setActiveTab("upload")}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+          onClick={() => handleTabChange("upload")}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors shrink-0 flex items-center gap-1.5 ${
             activeTab === "upload"
               ? "bg-indigo-600 text-white shadow-sm"
               : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
@@ -558,8 +724,19 @@ export function AdminPanel({
           <span>Upload Wallpaper</span>
         </button>
         <button
-          onClick={() => setActiveTab("categories")}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+          onClick={() => handleTabChange("health")}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors shrink-0 flex items-center gap-1.5 ${
+            activeTab === "health"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          }`}
+        >
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          <span>Image Health</span>
+        </button>
+        <button
+          onClick={() => handleTabChange("categories")}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors shrink-0 ${
             activeTab === "categories"
               ? "bg-indigo-600 text-white shadow-sm"
               : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
@@ -568,8 +745,8 @@ export function AdminPanel({
           Categories ({categories.length})
         </button>
         <button
-          onClick={() => setActiveTab("collections")}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+          onClick={() => handleTabChange("collections")}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors shrink-0 ${
             activeTab === "collections"
               ? "bg-indigo-600 text-white shadow-sm"
               : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
@@ -668,6 +845,13 @@ export function AdminPanel({
                             <ExternalLink className="w-4 h-4" />
                           </a>
                           <button
+                            onClick={() => openReplaceModal(w)}
+                            className="p-1.5 rounded-lg text-neutral-400 hover:text-indigo-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                            title="Replace Image File"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
+                          <button
                             onClick={() => handleDeleteWallpaper(w.id)}
                             className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors"
                             title="Delete"
@@ -725,18 +909,53 @@ export function AdminPanel({
 
           {/* Success Banner */}
           {uploadSuccess && (
-            <div className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
-                  <Check className="w-5 h-5" />
+            <div className="p-6 rounded-3xl bg-emerald-500/10 border border-emerald-500/25 space-y-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-lg shadow-emerald-500/20">
+                    <Check className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-emerald-800 dark:text-emerald-300 text-base">
+                      Wallpaper Published Successfully!
+                    </h3>
+                    <p className="text-xs text-emerald-600/90 dark:text-emerald-400/90">
+                      &ldquo;{uploadSuccess.title}&rdquo; is now stored durably in the database and live on the site.
+                    </p>
+                  </div>
+                </div>
+                {(uploadSuccess.thumbnailUrl || uploadSuccess.fileUrl) && (
+                  <div className="relative w-16 h-10 rounded-lg overflow-hidden border border-emerald-500/30 bg-neutral-900 shrink-0">
+                    <Image
+                      src={uploadSuccess.thumbnailUrl || uploadSuccess.fileUrl}
+                      alt={uploadSuccess.title}
+                      fill
+                      className="object-cover"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Diagnostic metadata details */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-3.5 rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-emerald-500/20 text-xs">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-neutral-400 block">ID</span>
+                  <span className="font-mono text-neutral-800 dark:text-neutral-200 truncate block">{uploadSuccess.id}</span>
                 </div>
                 <div>
-                  <h3 className="font-bold text-emerald-700 dark:text-emerald-400 text-sm">
-                    Wallpaper Published Successfully!
-                  </h3>
-                  <p className="text-xs text-emerald-600/80 dark:text-emerald-400/80">
-                    &ldquo;{uploadSuccess.title}&rdquo; is now live in the public gallery.
-                  </p>
+                  <span className="text-[10px] uppercase font-bold text-neutral-400 block">Canonical Slug</span>
+                  <span className="font-mono text-neutral-800 dark:text-neutral-200 truncate block">{uploadSuccess.slug}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-neutral-400 block">Public URL</span>
+                  <a
+                    href={`/wallpapers/${uploadSuccess.slug}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-indigo-600 dark:text-indigo-400 hover:underline truncate block"
+                  >
+                    /wallpapers/{uploadSuccess.slug}
+                  </a>
                 </div>
               </div>
 
@@ -745,20 +964,21 @@ export function AdminPanel({
                   href={`/wallpapers/${uploadSuccess.slug}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all"
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/25 transition-all"
                 >
+                  <Eye className="w-4 h-4" />
                   <span>View Wallpaper on WallPC</span>
                   <ArrowUpRight className="w-3.5 h-3.5" />
                 </a>
                 <button
                   onClick={resetUploadWorkflow}
-                  className="px-4 py-2 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 text-xs font-bold hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors"
+                  className="px-4 py-2.5 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 text-xs font-bold hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors"
                 >
-                  Upload Another
+                  Upload Another Wallpaper
                 </button>
                 <button
-                  onClick={() => setActiveTab("wallpapers")}
-                  className="px-4 py-2 rounded-xl text-neutral-500 text-xs font-semibold hover:text-neutral-900 dark:hover:text-white transition-colors"
+                  onClick={() => handleTabChange("wallpapers")}
+                  className="px-4 py-2.5 rounded-xl text-neutral-500 text-xs font-semibold hover:text-neutral-900 dark:hover:text-white transition-colors"
                 >
                   Manage All Wallpapers
                 </button>
@@ -1170,6 +1390,314 @@ export function AdminPanel({
                 <p className="text-xs text-neutral-400">/{col.slug}</p>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Tab 5: Image Health Diagnostics */}
+      {activeTab === "health" && (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-neutral-900 dark:text-white flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-indigo-500" />
+                <span>Image Storage & Health Diagnostics</span>
+              </h2>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                Audit all wallpapers to detect broken URLs, missing resolutions, and unoptimized paths.
+              </p>
+            </div>
+            <button
+              onClick={fetchHealthData}
+              disabled={healthLoading}
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 shadow-sm transition-all"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${healthLoading ? "animate-spin" : ""}`} />
+              <span>{healthLoading ? "Scanning..." : "Re-Scan Catalog"}</span>
+            </button>
+          </div>
+
+          {healthLoading && !healthData && (
+            <div className="p-12 text-center rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-[#111116]">
+              <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin mx-auto mb-3" />
+              <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
+                Scanning image health across database...
+              </p>
+            </div>
+          )}
+
+          {healthData && (
+            <>
+              {/* Summary stat cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                <div className="p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-[#111116] space-y-1">
+                  <p className="text-xs font-semibold text-neutral-500">Audited Wallpapers</p>
+                  <p className="text-2xl font-black text-neutral-900 dark:text-white">
+                    {healthData.summary?.total ?? 0}
+                  </p>
+                </div>
+                <div className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 space-y-1">
+                  <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">Healthy</p>
+                  <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
+                    {healthData.summary?.healthy ?? 0}
+                  </p>
+                </div>
+                <div className="p-4 rounded-2xl border border-rose-500/20 bg-rose-500/5 space-y-1">
+                  <p className="text-xs font-semibold text-rose-600 dark:text-rose-400">Broken / Invalid URL</p>
+                  <p className="text-2xl font-black text-rose-600 dark:text-rose-400">
+                    {healthData.summary?.brokenUrl ?? 0}
+                  </p>
+                </div>
+                <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 space-y-1">
+                  <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">Missing Dimensions</p>
+                  <p className="text-2xl font-black text-amber-600 dark:text-amber-400">
+                    {healthData.summary?.missingDimensions ?? 0}
+                  </p>
+                </div>
+              </div>
+
+              {/* Health Results Table */}
+              <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-[#111116] overflow-hidden shadow-sm">
+                <div className="p-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+                  <h3 className="font-bold text-sm text-neutral-900 dark:text-white">
+                    Audit Details ({(healthData.items || healthData.wallpapers || []).length} items)
+                  </h3>
+                  <span className="text-[11px] text-neutral-400">
+                    Storage: {healthData.storageProvider || "Local / Vercel Blob"}
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs sm:text-sm">
+                    <thead className="bg-neutral-50 dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 text-neutral-500 uppercase text-[10px] tracking-wider">
+                      <tr>
+                        <th className="p-4">Wallpaper</th>
+                        <th className="p-4">Status</th>
+                        <th className="p-4">Resolution</th>
+                        <th className="p-4">Image Source</th>
+                        <th className="p-4 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800/80">
+                      {(healthData.items || healthData.wallpapers || []).map((item: any) => (
+                        <tr key={item.id} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-900/30">
+                          <td className="p-4">
+                            <div className="flex items-center gap-3">
+                              <div className="relative w-12 h-7 rounded overflow-hidden bg-neutral-800 shrink-0 border border-neutral-200 dark:border-neutral-800">
+                                {item.imageUrl ? (
+                                  <Image
+                                    src={item.imageUrl}
+                                    alt={item.title}
+                                    fill
+                                    className="object-cover"
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-500">
+                                    No Pic
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-neutral-900 dark:text-white line-clamp-1">
+                                  {item.title}
+                                </p>
+                                <p className="text-[11px] text-neutral-400 font-mono">
+                                  /{item.slug}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            {item.status === "healthy" && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                                <Check className="w-3 h-3" />
+                                <span>Healthy</span>
+                              </span>
+                            )}
+                            {item.status === "broken_url" && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-600 border border-rose-500/20">
+                                <AlertCircle className="w-3 h-3" />
+                                <span>Broken URL</span>
+                              </span>
+                            )}
+                            {item.status === "missing_url" && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-600 border border-rose-500/20">
+                                <AlertCircle className="w-3 h-3" />
+                                <span>Missing URL</span>
+                              </span>
+                            )}
+                            {item.status === "missing_dimensions" && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                                <AlertCircle className="w-3 h-3" />
+                                <span>Missing Dims</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4 font-mono text-[11px] text-neutral-600 dark:text-neutral-300">
+                            {item.width && item.height ? `${item.width}×${item.height}` : "Unknown"}
+                          </td>
+                          <td className="p-4 font-mono text-[11px] text-neutral-500 max-w-[200px] truncate">
+                            {item.imageUrl || "None"}
+                          </td>
+                          <td className="p-4 text-right">
+                            <div className="inline-flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  const originalW = wallpapers.find((w) => w.id === item.id) || item;
+                                  openReplaceModal(originalW);
+                                }}
+                                className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 flex items-center gap-1 transition-colors"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                <span>Replace Image</span>
+                              </button>
+                              <a
+                                href={`/wallpapers/${item.slug}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1 rounded-lg text-neutral-400 hover:text-indigo-500 transition-colors"
+                                title="Open in WallPC"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </a>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Replace Image Modal */}
+      {replaceTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white dark:bg-[#111116] border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-lg text-neutral-900 dark:text-white flex items-center gap-2">
+                  <RefreshCw className="w-5 h-5 text-indigo-500" />
+                  <span>Replace Wallpaper Image</span>
+                </h3>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                  Uploading a new file preserves the slug and view stats while refreshing storage.
+                </p>
+              </div>
+              <button
+                onClick={closeReplaceModal}
+                className="p-1.5 rounded-xl text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-xs">
+              <span className="text-neutral-400">Target Wallpaper:</span>{" "}
+              <strong className="text-neutral-900 dark:text-white">{replaceTarget.title}</strong>{" "}
+              <span className="font-mono text-neutral-500">({replaceTarget.slug})</span>
+            </div>
+
+            {replaceError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-600 dark:text-rose-400 text-xs font-medium flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{replaceError}</span>
+              </div>
+            )}
+
+            <input
+              ref={replaceFileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) {
+                  handleReplaceFileSelect(e.target.files[0]);
+                }
+              }}
+            />
+
+            {!replacePreview ? (
+              <div
+                onClick={() => replaceFileInputRef.current?.click()}
+                className="border-2 border-dashed border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 text-center cursor-pointer hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all flex flex-col items-center gap-2"
+              >
+                <Upload className="w-6 h-6 text-indigo-500" />
+                <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                  Click to select new image file
+                </p>
+                <p className="text-[11px] text-neutral-400">
+                  JPG, PNG, or WEBP • Min 1920×1080
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="relative aspect-video rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-200 dark:border-neutral-800">
+                  <Image
+                    src={replacePreview}
+                    alt="Replacement Preview"
+                    fill
+                    className="object-contain"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      URL.revokeObjectURL(replacePreview);
+                      setReplacePreview(null);
+                      setReplaceFile(null);
+                      setReplaceSpecs(null);
+                    }}
+                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/70 hover:bg-black text-white transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {replaceSpecs && (
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs p-2.5 rounded-xl bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800">
+                    <div>
+                      <span className="text-[10px] text-neutral-400 uppercase font-bold block">Resolution</span>
+                      <span className="font-mono text-neutral-800 dark:text-neutral-200">
+                        {replaceSpecs.width}×{replaceSpecs.height}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-neutral-400 uppercase font-bold block">Format</span>
+                      <span className="font-mono text-neutral-800 dark:text-neutral-200">
+                        {replaceSpecs.format}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-neutral-400 uppercase font-bold block">File Size</span>
+                      <span className="font-mono text-neutral-800 dark:text-neutral-200">
+                        {replaceSpecs.sizeFormatted}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={closeReplaceModal}
+                disabled={replaceLoading}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeReplaceImage}
+                disabled={replaceLoading || !replaceFile}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-600/25 transition-all"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${replaceLoading ? "animate-spin" : ""}`} />
+                <span>{replaceLoading ? "Uploading & Updating..." : "Confirm Replacement"}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -263,17 +263,22 @@ export async function getCollectionBySlug(
 
 export async function getWallpaperBySlug(slug: string): Promise<FullWallpaper | null> {
   if (!slug) return null;
-  const cleanSlug = decodeURIComponent(slug).toLowerCase().trim();
+  const rawSlug = String(slug);
+  const cleanSlug = decodeURIComponent(rawSlug).toLowerCase().trim();
+  const dbConfigured = isDatabaseConfigured();
+  let dbResult: any = null;
+  let dbError: string | null = null;
 
-  // 1. Try querying Prisma database first if configured
-  if (isDatabaseConfigured()) {
+  // 1. Query persistent DB by exact slug or ID first
+  if (dbConfigured) {
     try {
-      const dbWallpaper = await db.wallpaper.findFirst({
+      dbResult = await db.wallpaper.findFirst({
         where: {
           OR: [
             { slug: cleanSlug },
-            { slug: slug.trim() },
-            { id: slug.trim() },
+            { slug: rawSlug.trim() },
+            { id: cleanSlug },
+            { id: rawSlug.trim() },
           ],
         },
         include: {
@@ -284,44 +289,57 @@ export async function getWallpaperBySlug(slug: string): Promise<FullWallpaper | 
         },
       });
 
-      if (dbWallpaper) {
-        return normalizeWallpaper(dbWallpaper);
+      if (dbResult) {
+        return normalizeWallpaper(dbResult);
       }
-
-      // If DB is configured, check if this is an initial static seed wallpaper
-      const isStaticSeed = WALLPAPERS.some(
-        (s) => s.slug.toLowerCase() === cleanSlug || s.id === slug || s.id === cleanSlug
-      );
-      if (isStaticSeed) {
-        const staticItem = getWallpapersStore().find(
-          (w) =>
-            w.slug.toLowerCase() === cleanSlug ||
-            w.slug === slug ||
-            w.id === slug
-        );
-        return staticItem ? normalizeWallpaper(staticItem) : null;
-      }
-
-      // If not in DB and not a static seed wallpaper, it does not exist (or was deleted)
-      return null;
-    } catch (dbErr) {
-      console.warn("DB findFirst by slug failed, checking in-memory catalog store:", dbErr);
+    } catch (err: any) {
+      dbError = err?.message || String(err);
+      console.error("[getWallpaperBySlug] Database lookup failed:", {
+        cleanSlug,
+        error: dbError,
+      });
     }
   }
 
-  // 2. Query singleton catalog store when database is not configured
-  const item = getWallpapersStore().find(
+  // 2. If not found in persistent DB, check static demo catalog
+  const staticItem = WALLPAPERS.find(
     (w) =>
       w.slug.toLowerCase() === cleanSlug ||
-      w.slug === slug ||
-      w.id === slug
+      w.slug === rawSlug.trim() ||
+      w.id === cleanSlug ||
+      w.id === rawSlug.trim()
   );
 
-  return item ? normalizeWallpaper(item) : null;
+  if (staticItem) {
+    return normalizeWallpaper(staticItem);
+  }
+
+  // 3. Not found in DB and not found in static demo catalog
+  // Log diagnostic info safely without leaking database credentials
+  console.warn("[getWallpaperBySlug] Wallpaper not found:", {
+    requestedSlug: rawSlug,
+    normalizedSlug: cleanSlug,
+    databaseConfigured: dbConfigured,
+    databaseQueryResult: dbResult ? "found" : "null",
+    databaseError: dbError,
+    fallbackResult: "not_found_in_static_catalog",
+  });
+
+  return null;
 }
 
 export async function getWallpaperById(id: string): Promise<FullWallpaper | null> {
   return getWallpaperBySlug(id);
+}
+
+function isValidImageUrl(url: any): boolean {
+  if (!url || typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  // Exclude local absolute filesystem paths
+  if (trimmed.startsWith("file://") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return false;
+  // Allow relative paths or valid web protocols
+  return trimmed.startsWith("/") || trimmed.startsWith("http://") || trimmed.startsWith("https://");
 }
 
 export async function getWallpapers(
@@ -337,11 +355,12 @@ export async function getWallpapers(
     limit = 24,
   } = options;
 
-  let allWallpapers: FullWallpaper[] = [];
+  let dbWallpapersList: FullWallpaper[] = [];
 
+  // 1. Fetch published wallpapers from persistent database
   if (isDatabaseConfigured()) {
     try {
-      const dbWallpapers = await db.wallpaper.findMany({
+      const dbRows = await db.wallpaper.findMany({
         where: {
           published: true,
         },
@@ -354,25 +373,23 @@ export async function getWallpapers(
         },
       });
 
-      if (dbWallpapers && dbWallpapers.length > 0) {
-        allWallpapers = dbWallpapers.map(normalizeWallpaper);
+      if (dbRows && dbRows.length > 0) {
+        dbWallpapersList = dbRows
+          .filter((row) => isValidImageUrl(row.imageUrl || row.fileUrl))
+          .map(normalizeWallpaper);
       }
     } catch (err) {
-      console.warn("Database getWallpapers query failed, falling back to static catalog:", err);
+      console.error("[getWallpapers] Database query failed, using static demo content:", err);
     }
   }
 
-  // Merge static catalog items if database has fewer items or fallback
-  if (allWallpapers.length === 0) {
-    allWallpapers = wallpapersStore.map(normalizeWallpaper);
-  } else {
-    const existingSlugs = new Set(allWallpapers.map((w) => w.slug.toLowerCase()));
-    for (const item of wallpapersStore) {
-      if (!existingSlugs.has(item.slug.toLowerCase())) {
-        allWallpapers.push(normalizeWallpaper(item));
-      }
-    }
-  }
+  // 2. Combine DB wallpapers + static demo wallpapers (DB priority, deduplicated by slug)
+  const existingSlugs = new Set(dbWallpapersList.map((w) => w.slug.toLowerCase()));
+  const staticDemoList: FullWallpaper[] = WALLPAPERS
+    .filter((w) => !existingSlugs.has(w.slug.toLowerCase()))
+    .map(normalizeWallpaper);
+
+  const allWallpapers: FullWallpaper[] = [...dbWallpapersList, ...staticDemoList];
 
   let filtered = allWallpapers;
 

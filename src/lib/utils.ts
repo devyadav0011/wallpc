@@ -45,11 +45,14 @@ export function getAspectRatio(width: number, height: number): string {
 }
 
 export function generateSlug(text: string): string {
+  if (!text) return "";
   return text
     .toString()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim()
-    .replace(/[^\w\s-]/g, "")
+    .replace(/[^a-z0-9\s-]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");

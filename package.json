@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/ensure-prisma-provider.js && next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "prisma generate",
+    "postinstall": "node scripts/ensure-prisma-provider.js",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts"
   },

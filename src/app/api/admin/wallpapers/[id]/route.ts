@@ -21,25 +21,39 @@ export async function PUT(
     const { id } = await params;
     const body = await request.json();
 
+    const existing = await getWallpaperById(id);
     let updated: any = null;
 
     if (isDatabaseConfigured()) {
       try {
+        const width = body.width ? parseInt(body.width, 10) : body.resolutionWidth ? parseInt(body.resolutionWidth, 10) : undefined;
+        const height = body.height ? parseInt(body.height, 10) : body.resolutionHeight ? parseInt(body.resolutionHeight, 10) : undefined;
+        const resolution = body.resolution || (width && height ? `${width}×${height}` : undefined);
+
         updated = await db.wallpaper.update({
           where: { id },
           data: {
             title: body.title !== undefined ? body.title : undefined,
             description: body.description !== undefined ? body.description : undefined,
             categoryId: body.categoryId !== undefined ? body.categoryId : undefined,
-            resolutionWidth: body.resolutionWidth ? parseInt(body.resolutionWidth, 10) : undefined,
-            resolutionHeight: body.resolutionHeight ? parseInt(body.resolutionHeight, 10) : undefined,
+            width,
+            height,
+            resolution,
+            resolutionWidth: width,
+            resolutionHeight: height,
             orientation: body.orientation !== undefined ? body.orientation : undefined,
+            imageUrl: body.imageUrl || body.fileUrl || undefined,
+            thumbnailUrl: body.thumbnailUrl !== undefined ? body.thumbnailUrl : undefined,
+            image4kUrl: body.image4kUrl || body.fileUrl4k || undefined,
+            image1440pUrl: body.image1440pUrl || body.fileUrl1440p || undefined,
+            image1080pUrl: body.image1080pUrl || body.fileUrl1080p || undefined,
             fileUrl: body.fileUrl !== undefined ? body.fileUrl : undefined,
             fileUrl4k: body.fileUrl4k !== undefined ? body.fileUrl4k : undefined,
             fileUrl1440p: body.fileUrl1440p !== undefined ? body.fileUrl1440p : undefined,
             fileUrl1080p: body.fileUrl1080p !== undefined ? body.fileUrl1080p : undefined,
-            thumbnailUrl: body.thumbnailUrl !== undefined ? body.thumbnailUrl : undefined,
-            previewUrl: body.previewUrl !== undefined ? body.previewUrl : undefined,
+            previewUrl: body.previewUrl || body.imageUrl || body.fileUrl || undefined,
+            fileType: body.fileType !== undefined ? body.fileType : undefined,
+            fileSize: body.fileSize !== undefined ? body.fileSize : undefined,
             featured: body.featured !== undefined ? !!body.featured : undefined,
             trending: body.trending !== undefined ? !!body.trending : undefined,
             published: body.published !== undefined ? !!body.published : undefined,
@@ -57,6 +71,14 @@ export async function PUT(
       revalidatePath("/wallpapers");
       revalidatePath("/latest");
       revalidatePath("/trending");
+      revalidatePath("/popular");
+      revalidatePath("/search");
+      if (existing?.slug) {
+        revalidatePath(`/wallpapers/${existing.slug}`);
+      }
+      if (updated?.slug && updated.slug !== existing?.slug) {
+        revalidatePath(`/wallpapers/${updated.slug}`);
+      }
     } catch {
       // Ignore in dev
     }

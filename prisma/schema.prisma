@@ -14,14 +14,21 @@ model Wallpaper {
   description      String?
   categoryId       String
   category         Category @relation(fields: [categoryId], references: [id])
-  resolutionWidth  Int
-  resolutionHeight Int
+  width            Int      @default(3840)
+  height           Int      @default(2160)
+  resolution       String?  @default("3840×2160")
+  resolutionWidth  Int      @default(3840)
+  resolutionHeight Int      @default(2160)
   orientation      String   @default("landscape") // landscape, portrait, ultrawide
+  imageUrl         String?
+  thumbnailUrl     String
+  image4kUrl       String?
+  image1440pUrl    String?
+  image1080pUrl    String?
   fileUrl          String
   fileUrl4k        String?
   fileUrl1440p     String?
   fileUrl1080p     String?
-  thumbnailUrl     String
   previewUrl       String
   fileType         String   @default("WEBP") // WEBP, JPG, PNG, AVIF
   fileSize         String   @default("4.2 MB")

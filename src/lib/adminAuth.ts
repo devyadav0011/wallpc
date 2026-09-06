@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
 
-export const DEFAULT_ADMIN_KEY = "nimblux@Dev@8937";
-
-export function getAdminSecretKey(): string {
-  return process.env.ADMIN_SECRET_KEY?.trim() || DEFAULT_ADMIN_KEY;
+export function getAdminSecretKey(): string | null {
+  const key = process.env.ADMIN_SECRET || process.env.ADMIN_SECRET_KEY;
+  if (!key || !key.trim()) return null;
+  return key.trim();
 }
 
 export function verifyAdminAuth(request: NextRequest): boolean {
