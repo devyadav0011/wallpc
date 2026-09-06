@@ -39,12 +39,10 @@ export async function GET(request: NextRequest) {
       dbStatus = {
         status: "not_configured",
         provider: "none",
-        error: process.env.VERCEL
-          ? "Production database not configured. SQLite is not supported on Vercel; configure a PostgreSQL DATABASE_URL."
-          : "DATABASE_URL environment variable is not configured.",
+        error: "PostgreSQL DATABASE_URL is not configured. WallPC requires a hosted PostgreSQL database.",
       };
     } else {
-      const provider = isPostgresConfigured() ? "postgresql" : "sqlite";
+      const provider = "postgresql";
       try {
         await db.$queryRaw`SELECT 1`;
         const [wCount, cCount] = await Promise.all([

@@ -5,33 +5,24 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 /**
- * Checks whether a valid DATABASE_URL is provided in the environment.
- * For production (Vercel), it must be a PostgreSQL URL (Supabase/Neon).
- * For local development, SQLite (file:./dev.db) is supported.
+ * Checks whether a valid PostgreSQL DATABASE_URL is configured in the environment.
+ * WallPC strictly requires PostgreSQL for persistent database storage.
  */
 export function isDatabaseConfigured(): boolean {
-  const url = process.env.DATABASE_URL?.trim();
-  if (!url) return false;
-  // Vercel serverless environments have a read-only filesystem; SQLite cannot be used in production
-  if (process.env.VERCEL && url.startsWith("file:")) return false;
-  return (
-    url.startsWith("file:") ||
-    url.startsWith("postgresql://") ||
-    url.startsWith("postgres://")
-  );
-}
-
-/**
- * Checks whether a production-grade PostgreSQL database is configured.
- */
-export function isPostgresConfigured(): boolean {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) return false;
   return url.startsWith("postgresql://") || url.startsWith("postgres://");
 }
 
 /**
- * Creates a standard PrismaClient instance with appropriate logging.
+ * Backward compatibility alias for PostgreSQL configuration check.
+ */
+export function isPostgresConfigured(): boolean {
+  return isDatabaseConfigured();
+}
+
+/**
+ * Creates a standard PrismaClient instance with appropriate server-side logging.
  */
 function createPrismaClient(): PrismaClient {
   return new PrismaClient({
@@ -56,4 +47,50 @@ export function getDb(): PrismaClient {
   return db;
 }
 
+export interface DatabaseHealthResult {
+  healthy: boolean;
+  provider: string;
+  latencyMs: number;
+  wallpapersCount?: number;
+  categoriesCount?: number;
+  error?: string;
+}
 
+/**
+ * Performs an active server-side database health check via SELECT 1.
+ */
+export async function checkDatabaseHealth(): Promise<DatabaseHealthResult> {
+  if (!isDatabaseConfigured()) {
+    return {
+      healthy: false,
+      provider: "none",
+      latencyMs: 0,
+      error: "PostgreSQL DATABASE_URL is not configured",
+    };
+  }
+
+  const startTime = Date.now();
+  try {
+    await db.$queryRaw`SELECT 1`;
+    const latencyMs = Date.now() - startTime;
+    const [wallpapersCount, categoriesCount] = await Promise.all([
+      db.wallpaper.count(),
+      db.category.count(),
+    ]);
+    return {
+      healthy: true,
+      provider: "postgresql",
+      latencyMs,
+      wallpapersCount,
+      categoriesCount,
+    };
+  } catch (err: any) {
+    const latencyMs = Date.now() - startTime;
+    return {
+      healthy: false,
+      provider: "postgresql",
+      latencyMs,
+      error: err?.message?.split("\n")[0] || "Database connection query failed",
+    };
+  }
+}

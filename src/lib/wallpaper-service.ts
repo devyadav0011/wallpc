@@ -9,7 +9,6 @@ import {
   normalizeWallpaper,
   CategoryItem,
   CollectionItem,
-  WallpaperItem,
 } from "@/lib/types";
 import { WALLPAPERS } from "@/data/wallpapers";
 import { CATEGORIES } from "@/data/categories";
@@ -19,43 +18,6 @@ import { db, isDatabaseConfigured } from "@/lib/db";
 export type FullWallpaper = NormalizedWallpaper;
 export type FullCategory = CategoryItem & Category;
 export type FullCollection = CollectionItem & Collection;
-
-// Shared singleton stores across Next.js server chunks
-const globalRef = globalThis as any;
-if (!globalRef.__wallpc_wallpapers_store__) {
-  globalRef.__wallpc_wallpapers_store__ = [...WALLPAPERS].map(normalizeWallpaper);
-}
-if (!globalRef.__wallpc_categories_store__) {
-  globalRef.__wallpc_categories_store__ = [...CATEGORIES];
-}
-if (!globalRef.__wallpc_collections_store__) {
-  globalRef.__wallpc_collections_store__ = [...COLLECTIONS];
-}
-
-export function getWallpapersStore(): NormalizedWallpaper[] {
-  if (!globalRef.__wallpc_wallpapers_store__) {
-    globalRef.__wallpc_wallpapers_store__ = [...WALLPAPERS].map(normalizeWallpaper);
-  }
-  return globalRef.__wallpc_wallpapers_store__;
-}
-
-export function getCategoriesStore(): Category[] {
-  if (!globalRef.__wallpc_categories_store__) {
-    globalRef.__wallpc_categories_store__ = [...CATEGORIES];
-  }
-  return globalRef.__wallpc_categories_store__;
-}
-
-export function getCollectionsStore(): Collection[] {
-  if (!globalRef.__wallpc_collections_store__) {
-    globalRef.__wallpc_collections_store__ = [...COLLECTIONS];
-  }
-  return globalRef.__wallpc_collections_store__;
-}
-
-let wallpapersStore: NormalizedWallpaper[] = globalRef.__wallpc_wallpapers_store__;
-let categoriesStore: Category[] = globalRef.__wallpc_categories_store__;
-let collectionsStore: Collection[] = globalRef.__wallpc_collections_store__;
 
 export function formatWallpaperToItem(w: any): NormalizedWallpaper {
   return normalizeWallpaper(w);
@@ -111,9 +73,12 @@ export async function getCategories(): Promise<FullCategory[]> {
     }
   }
 
-  return categoriesStore.map((cat) => {
-    const count = wallpapersStore.filter(
-      (w) => w.categorySlug.toLowerCase() === cat.slug.toLowerCase()
+  // Fallback to static seed data
+  return CATEGORIES.map((cat) => {
+    const count = WALLPAPERS.filter(
+      (w) =>
+        w.categorySlug.toLowerCase() === cat.slug.toLowerCase() ||
+        w.category.toLowerCase() === cat.name.toLowerCase()
     ).length;
     return formatCategory(cat, count);
   });
@@ -150,10 +115,12 @@ export async function getCategoryBySlug(slug: string): Promise<FullCategory | nu
     }
   }
 
-  const cat = categoriesStore.find((c) => c.slug.toLowerCase() === cleanSlug);
+  const cat = CATEGORIES.find((c) => c.slug.toLowerCase() === cleanSlug);
   if (!cat) return null;
-  const count = wallpapersStore.filter(
-    (w) => w.categorySlug.toLowerCase() === cat.slug.toLowerCase()
+  const count = WALLPAPERS.filter(
+    (w) =>
+      w.categorySlug.toLowerCase() === cat.slug.toLowerCase() ||
+      w.category.toLowerCase() === cat.name.toLowerCase()
   ).length;
   return formatCategory(cat, count);
 }
@@ -188,8 +155,8 @@ export async function getCollections(): Promise<FullCollection[]> {
     }
   }
 
-  return collectionsStore.map((col) => {
-    const count = wallpapersStore.filter((w) =>
+  return COLLECTIONS.map((col) => {
+    const count = WALLPAPERS.filter((w) =>
       w.collectionSlugs?.includes(col.slug)
     ).length;
     return formatCollection(col, count);
@@ -248,10 +215,10 @@ export async function getCollectionBySlug(
     }
   }
 
-  const col = collectionsStore.find((c) => c.slug.toLowerCase() === cleanSlug);
+  const col = COLLECTIONS.find((c) => c.slug.toLowerCase() === cleanSlug);
   if (!col) return null;
 
-  const items = wallpapersStore.filter((w) =>
+  const items = WALLPAPERS.filter((w) =>
     w.collectionSlugs?.includes(col.slug)
   );
 
@@ -269,7 +236,7 @@ export async function getWallpaperBySlug(slug: string): Promise<FullWallpaper | 
   let dbResult: any = null;
   let dbError: string | null = null;
 
-  // 1. Query persistent DB by exact slug or ID first
+  // 1. Query persistent PostgreSQL DB by exact slug or ID first
   if (dbConfigured) {
     try {
       dbResult = await db.wallpaper.findFirst({
@@ -315,7 +282,6 @@ export async function getWallpaperBySlug(slug: string): Promise<FullWallpaper | 
   }
 
   // 3. Not found in DB and not found in static demo catalog
-  // Log diagnostic info safely without leaking database credentials
   console.warn("[getWallpaperBySlug] Wallpaper not found:", {
     requestedSlug: rawSlug,
     normalizedSlug: cleanSlug,
@@ -336,9 +302,7 @@ function isValidImageUrl(url: any): boolean {
   if (!url || typeof url !== "string") return false;
   const trimmed = url.trim();
   if (!trimmed) return false;
-  // Exclude local absolute filesystem paths
   if (trimmed.startsWith("file://") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return false;
-  // Allow relative paths or valid web protocols
   return trimmed.startsWith("/") || trimmed.startsWith("http://") || trimmed.startsWith("https://");
 }
 
@@ -357,7 +321,7 @@ export async function getWallpapers(
 
   let dbWallpapersList: FullWallpaper[] = [];
 
-  // 1. Fetch published wallpapers from persistent database
+  // 1. Fetch published wallpapers from persistent PostgreSQL database
   if (isDatabaseConfigured()) {
     try {
       const dbRows = await db.wallpaper.findMany({
@@ -500,15 +464,8 @@ export async function incrementDownloads(id: string): Promise<boolean> {
       });
       return true;
     } catch {
-      // Fall through to memory
+      return false;
     }
-  }
-
-  const item = wallpapersStore.find((w) => w.id === id);
-  if (item) {
-    item.downloads += 1;
-    item.trendingScore += 3;
-    return true;
   }
   return false;
 }
@@ -525,89 +482,63 @@ export async function incrementViews(id: string): Promise<boolean> {
       });
       return true;
     } catch {
-      // Fall through to memory
+      return false;
     }
-  }
-
-  const item = wallpapersStore.find((w) => w.id === id);
-  if (item) {
-    item.views += 1;
-    item.trendingScore += 0.5;
-    return true;
   }
   return false;
 }
 
 export async function getPlatformStats() {
-  const totalDownloads = wallpapersStore.reduce((acc, w) => acc + w.downloads, 0);
-  const totalViews = wallpapersStore.reduce((acc, w) => acc + w.views, 0);
-  const topDownloaded = [...wallpapersStore]
-    .sort((a, b) => b.downloads - a.downloads)
-    .slice(0, 5);
-  const trendingWallpapers = [...wallpapersStore]
-    .sort((a, b) => b.trendingScore - a.trendingScore)
-    .slice(0, 5);
+  if (isDatabaseConfigured()) {
+    try {
+      const [totalWallpapers, totalCategories, totalCollections, aggregates] =
+        await Promise.all([
+          db.wallpaper.count(),
+          db.category.count(),
+          db.collection.count(),
+          db.wallpaper.aggregate({
+            _sum: { downloads: true, views: true },
+          }),
+        ]);
 
+      const [topDownloaded, trendingWallpapers] = await Promise.all([
+        db.wallpaper.findMany({
+          take: 5,
+          orderBy: { downloads: "desc" },
+          include: { category: true },
+        }),
+        db.wallpaper.findMany({
+          take: 5,
+          where: { trending: true },
+          orderBy: { trendingScore: "desc" },
+          include: { category: true },
+        }),
+      ]);
+
+      return {
+        totalWallpapers,
+        totalDownloads: aggregates._sum.downloads || 0,
+        totalViews: aggregates._sum.views || 0,
+        totalCategories,
+        totalCollections,
+        newUploads: Math.min(totalWallpapers, 8),
+        topDownloaded: topDownloaded.map(normalizeWallpaper),
+        trendingWallpapers: trendingWallpapers.map(normalizeWallpaper),
+      };
+    } catch (err) {
+      console.warn("[getPlatformStats] DB query failed, using static catalog:", err);
+    }
+  }
+
+  const staticWps = WALLPAPERS.map(normalizeWallpaper);
   return {
-    totalWallpapers: wallpapersStore.length,
-    totalDownloads,
-    totalViews,
-    totalCategories: categoriesStore.length,
-    totalCollections: collectionsStore.length,
+    totalWallpapers: staticWps.length,
+    totalDownloads: staticWps.reduce((acc, w) => acc + w.downloads, 0),
+    totalViews: staticWps.reduce((acc, w) => acc + w.views, 0),
+    totalCategories: CATEGORIES.length,
+    totalCollections: COLLECTIONS.length,
     newUploads: 8,
-    topDownloaded,
-    trendingWallpapers,
+    topDownloaded: [...staticWps].sort((a, b) => b.downloads - a.downloads).slice(0, 5),
+    trendingWallpapers: [...staticWps].sort((a, b) => b.trendingScore - a.trendingScore).slice(0, 5),
   };
-}
-
-export function addWallpaperToStore(wallpaper: any): FullWallpaper {
-  const normalized = normalizeWallpaper(wallpaper);
-  const store = getWallpapersStore();
-  const cleanId = String(normalized.id || "").toLowerCase();
-  const cleanSlug = normalized.slug.toLowerCase();
-
-  for (let i = store.length - 1; i >= 0; i--) {
-    if (
-      store[i].id.toLowerCase() === cleanId ||
-      store[i].slug.toLowerCase() === cleanSlug
-    ) {
-      store.splice(i, 1);
-    }
-  }
-
-  store.unshift(normalized);
-  return normalized;
-}
-
-export function removeWallpaperFromStore(idOrSlug: string): boolean {
-  if (!idOrSlug) return false;
-  const clean = idOrSlug.toLowerCase().trim();
-  const store = getWallpapersStore();
-  let removed = false;
-
-  for (let i = store.length - 1; i >= 0; i--) {
-    if (
-      store[i].id === idOrSlug ||
-      store[i].id.toLowerCase() === clean ||
-      store[i].slug.toLowerCase() === clean
-    ) {
-      store.splice(i, 1);
-      removed = true;
-    }
-  }
-
-  return removed;
-}
-
-export function updateWallpaperInStore(idOrSlug: string, updates: any): FullWallpaper | null {
-  if (!idOrSlug) return null;
-  const clean = idOrSlug.toLowerCase().trim();
-  const store = getWallpapersStore();
-  const item = store.find(
-    (w) => w.id === idOrSlug || w.slug.toLowerCase() === clean
-  );
-  if (!item) return null;
-
-  Object.assign(item, updates);
-  return normalizeWallpaper(item);
 }
